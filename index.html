@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valuation Playbook - Stock Analysis</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .spinner { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div id="app" class="p-4">
+    <div class="max-w-5xl mx-auto">
+      <h1 class="text-2xl font-bold mb-1">📊 Valuation Playbook</h1>
+      <p class="text-gray-600 text-sm mb-4">Real-time stock valuation using Yahoo Finance</p>
+      
+      <div class="bg-white rounded-lg p-4 mb-4 shadow-sm">
+        <div class="flex gap-3 flex-col sm:flex-row">
+          <input type="text" id="tickerInput" placeholder="Enter tickers: ITC, RELIANCE, TCS" 
+            class="flex-1 border rounded px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+          <button id="analyzeBtn" onclick="analyze()" 
+            class="px-6 py-2 rounded font-medium bg-blue-600 text-white hover:bg-blue-700">
+            Analyze
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">Indian stocks: .NS auto-added. Try: ITC, RELIANCE, TCS, INFY, HDFCBANK</p>
+      </div>
+      
+      <div id="error" class="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm hidden"></div>
+      
+      <div id="loading" class="bg-blue-50 rounded p-3 mb-4 flex items-center gap-2 hidden">
+        <div class="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full spinner"></div>
+        <span id="status" class="text-blue-700 text-sm">Analyzing stocks... This may take 10-30 seconds.</span>
+      </div>
+      
+      <div id="ranking" class="bg-white rounded-lg p-4 mb-4 shadow-sm hidden">
+        <h2 class="font-semibold mb-2">🏆 Ranking</h2>
+        <div id="rankingList"></div>
+      </div>
+      
+      <div id="results" class="space-y-4"></div>
+      
+      <p id="footer" class="text-center text-gray-400 text-xs mt-6 hidden">Data from Yahoo Finance • Ratings based on valuation thresholds</p>
+    </div>
+  </div>
+
+<script>
+const F = {
+  cr: v => v != null ? `₹${Math.round(v).toLocaleString('en-IN')} Cr` : 'N/A',
+  n: (v, d = 2) => v != null ? Number(v).toFixed(d) : 'N/A',
+  p: v => v != null ? `${Number(v).toFixed(1)}%` : 'N/A',
+};
+
+const stars = n => n == null ? '<span class="text-gray-400 text-xs">N/A</span>' 
+  : `<span class="text-xs"><b>${n}/5</b> <span class="text-yellow-500">${'★'.repeat(n)}${'☆'.repeat(5-n)}</span></span>`;
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function hideError() {
+  document.getElementById('error').classList.add('hidden');
+}
+
+function setLoading(show) {
+  document.getElementById('loading').classList.toggle('hidden', !show);
+  document.getElementById('analyzeBtn').disabled = show;
+  document.getElementById('analyzeBtn').textContent = show ? 'Analyzing...' : 'Analyze';
+  document.getElementById('analyzeBtn').classList.toggle('bg-gray-300', show);
+  document.getElementById('analyzeBtn').classList.toggle('bg-blue-600', !show);
+  document.getElementById('tickerInput').disabled = show;
+}
+
+function renderRow(label, value, rating) {
+  return `<div class="flex justify-between items-center py-1 px-2 text-sm hover:bg-gray-50">
+    <span class="text-gray-600">${label}</span>
+    <div class="flex gap-2 items-center">
+      <span class="font-medium w-20 text-right">${value}</span>
+      <span class="w-24">${stars(rating)}</span>
+    </div>
+  </div>`;
+}
+
+function renderSection(title, weight, score, rows) {
+  return `<div class="border rounded-lg bg-white overflow-hidden">
+    <div class="bg-gray-50 px-3 py-2 flex justify-between border-b text-sm">
+      <span class="font-semibold">${title}</span>
+      <span class="text-gray-500">Wt:${weight}% | ${score != null ? Number(score).toFixed(1) : 'N/A'}</span>
+    </div>
+    <div>${rows}</div>
+  </div>`;
+}
+
+function renderCard(d) {
+  if (d.error) {
+    return `<div class="bg-red-50 border border-red-200 rounded-lg p-4">
+      <div class="flex justify-between items-center flex-wrap gap-2">
+        <div><h3 class="font-bold text-red-800">${d.ticker}</h3><p class="text-red-600 text-sm">${d.error}</p></div>
+        <button onclick="retrySingle('${d.ticker}')" class="bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700">Retry</button>
+      </div>
+    </div>`;
+  }
+  
+  const m = d.metrics || {};
+  const r = d.ratings || {};
+  const cs = d.categoryScores || {};
+  const score = d.finalScore;
+  const name = d.name;
+  const ticker = d.ticker;
+  const sector = d.sector;
+  
+  const color = score == null ? 'bg-gray-500' : score >= 4 ? 'bg-green-600' : score >= 3 ? 'bg-yellow-500' : score >= 2 ? 'bg-orange-500' : 'bg-red-500';
+  const label = score == null ? 'N/A' : score >= 4 ? 'Excellent' : score >= 3 ? 'Good' : score >= 2 ? 'Average' : 'Poor';
+  
+  return `<div class="border rounded-xl overflow-hidden bg-white shadow">
+    <div class="${color} text-white p-4">
+      <div class="flex justify-between">
+        <div><h2 class="text-lg font-bold">${name}</h2><p class="text-sm opacity-80">${ticker} • ${sector || 'N/A'}</p></div>
+        <div class="text-right"><div class="text-2xl font-bold">${score != null ? Number(score).toFixed(2) : 'N/A'}</div><div class="text-xs">/5.00 • ${label}</div></div>
+      </div>
+    </div>
+    <div class="p-3 grid md:grid-cols-2 gap-3">
+      ${renderSection('📊 Scale', 15, cs.scale, 
+        renderRow('Revenue', F.cr(m.revenue), r.revenue) + 
+        renderRow('Market Cap', F.cr(m.marketCap), r.marketCap))}
+      ${renderSection('📈 Growth', 15, cs.growth, 
+        renderRow('PEG', F.n(m.peg), r.peg) + 
+        renderRow('CAGR 3Y', F.p(m.cagr), r.cagr))}
+      ${renderSection('💰 Value', 25, cs.value, 
+        renderRow('PE/Industry', F.n(m.peIndustryRatio), r.peIndustry) + 
+        renderRow('Rev/MC', F.p(m.revenueMC ? m.revenueMC * 100 : null), r.revenueMC) + 
+        renderRow('EV/EBIT', F.n(m.evEbit), r.evEbit) + 
+        renderRow('CMP/FCF', F.n(m.cmpFcf), r.cmpFcf))}
+      ${renderSection('⭐ Quality', 25, cs.quality, 
+        renderRow('ROIC', F.p(m.roic), r.roic) + 
+        renderRow('ROE', F.p(m.roe), r.roe) + 
+        renderRow('ROCE', F.p(m.roce), r.roce) + 
+        renderRow('OPM', F.p(m.opm), r.opm))}
+      ${renderSection('⚠️ Risk', 10, cs.risk, 
+        renderRow('Volatility', F.p(m.volatility), r.volatility) + 
+        renderRow('Beta', F.n(m.beta), r.beta) + 
+        renderRow('Seasonal', m.seasonalityText || 'N/A', r.seasonality) + 
+        renderRow('Rev Vol', m.revenueVolatilityText || 'N/A', r.revenueVolatility))}
+      ${renderSection('🏦 Balance', 10, cs.balance, 
+        renderRow('Debt/Profit', m.netDebtProfitText || 'N/A', r.netDebtProfit) + 
+        renderRow('Quick Ratio', F.n(m.quickRatio), r.quickRatio))}
+    </div>
+    <div class="px-3 pb-3">
+      <div class="bg-gray-50 rounded p-2 text-xs flex justify-between flex-wrap gap-2">
+        <span>EPS: <b>${F.n(m.eps)}</b></span>
+        <span>Capex: <b>${F.cr(m.capex)}</b></span>
+        <span>Capex/Rev: <b>${F.p(m.capexRevenue)}</b></span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderResults(results) {
+  const validResults = results.filter(r => !r.error && r.finalScore != null);
+  if (validResults.length > 1) {
+    document.getElementById('ranking').classList.remove('hidden');
+    document.getElementById('rankingList').innerHTML = validResults.map((r, i) => {
+      const bg = i === 0 ? 'bg-yellow-400' : i === 1 ? 'bg-gray-300' : i === 2 ? 'bg-orange-300' : 'bg-gray-200';
+      const scoreBg = r.finalScore >= 4 ? 'bg-green-100 text-green-800' : r.finalScore >= 3 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+      return `<div class="flex items-center gap-3 py-1">
+        <span class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${bg}">${i + 1}</span>
+        <span class="flex-1">${r.name}</span>
+        <span class="text-gray-500 text-sm">${r.ticker}</span>
+        <span class="px-2 py-0.5 rounded text-sm font-medium ${scoreBg}">${Number(r.finalScore).toFixed(2)}</span>
+      </div>`;
+    }).join('');
+  } else {
+    document.getElementById('ranking').classList.add('hidden');
+  }
+  
+  document.getElementById('results').innerHTML = results.map(renderCard).join('');
+  document.getElementById('footer').classList.toggle('hidden', results.length === 0);
+}
+
+async function analyze() {
+  hideError();
+  const input = document.getElementById('tickerInput').value;
+  const tickers = input.split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
+  
+  if (tickers.length === 0) {
+    showError('Please enter at least one ticker');
+    return;
+  }
+  
+  setLoading(true);
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('ranking').classList.add('hidden');
+  
+  try {
+    const response = await fetch('/.netlify/functions/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      showError(data.error);
+    } else {
+      renderResults(data.results || []);
+    }
+  } catch (e) {
+    showError(`Error: ${e.message}`);
+  }
+  
+  setLoading(false);
+}
+
+async function retrySingle(ticker) {
+  const cleanTicker = ticker.replace(/\.\w+$/, '');
+  document.getElementById('tickerInput').value = cleanTicker;
+  analyze();
+}
+
+document.getElementById('tickerInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('analyzeBtn').disabled) analyze();
+});
+</script>
+</body>
+</html>

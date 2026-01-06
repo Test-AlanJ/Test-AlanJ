@@ -1,0 +1,11 @@
+{
+  "name": "valuation-playbook",
+  "version": "1.0.0",
+  "description": "Stock Valuation App using Yahoo Finance",
+  "main": "netlify/functions/analyze.js",
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "author": "",
+  "license": "MIT"
+}
